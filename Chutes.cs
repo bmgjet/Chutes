@@ -2,25 +2,21 @@ using System.Collections.Generic;
 using Oxide.Core;
 using UnityEngine;
 using System;
-
+using Newtonsoft.Json;
 
 namespace Oxide.Plugins
 {
-    [Info("Chutes", "bmgjet", "1.0.0")]
+    [Info("Chutes", "bmgjet", "1.0.1")]
     [Description("Parachute for use with safespace bases")]
 
     class Chutes : RustPlugin
     {
         #region Declarations
-        //Parachute
         public const string permUse = "Chutes.use";
         public const string permAuto = "Chutes.auto";
         public const string permHover = "Chutes.hover";
-        public int disableflyhackdelay = 10; //seconds
-        public float minheliautochute = 15f;
-        public float heliautochutedelay = 1.0f;
-        public float chutecooldowns = 1f;
         private static SaveData _data;
+        private static PluginConfig config;
         static int parachuteLayer = 1 << (int)Rust.Layer.Water | 1 << (int)Rust.Layer.Transparent | 1 << (int)Rust.Layer.World | 1 << (int)Rust.Layer.Construction | 1 << (int)Rust.Layer.Debris | 1 << (int)Rust.Layer.Default | 1 << (int)Rust.Layer.Terrain | 1 << (int)Rust.Layer.Tree | 1 << (int)Rust.Layer.Vehicle_Large | 1 << (int)Rust.Layer.Deployed;
         #endregion
 
@@ -30,19 +26,25 @@ namespace Oxide.Plugins
             permission.RegisterPermission(permUse, this);
             permission.RegisterPermission(permAuto, this);
             permission.RegisterPermission(permHover, this);
+
             if (!Interface.Oxide.DataFileSystem.ExistsDatafile(Name))
                 Interface.Oxide.DataFileSystem.GetDatafile(Name).Save();
             Chutes._data = Interface.Oxide.DataFileSystem.ReadObject<SaveData>(Name);
-            if(Chutes._data == null)
+            if (Chutes._data == null)
             {
                 WriteSaveData();
+            }
+
+            config = Config.ReadObject<PluginConfig>();
+            if (config == null)
+            {
+                LoadDefaultConfig();
             }
         }
 
         void Unload()
         {
             var objects = GameObject.FindObjectsOfType(typeof(ParaChute));
-
             if (objects != null)
             {
                 foreach (var gameObj in objects)
@@ -50,10 +52,12 @@ namespace Oxide.Plugins
                     GameObject.Destroy(gameObj);
                 }
             }
+
             if (Chutes._data != null)
-            {
                 Chutes._data = null;
-            }
+
+            if (Chutes.config != null)
+                Chutes.config = null;
         }
 
         void OnNewSave()
@@ -61,14 +65,36 @@ namespace Oxide.Plugins
             _data.chutecooldown.Clear();
             WriteSaveData();
         }
+        private object OnEntityTakeDamage(BasePlayer player, HitInfo hitInfo)
+        {
+            Rust.DamageType damageType = hitInfo.damageTypes.GetMajorityDamageType();
+            if (damageType != Rust.DamageType.Suicide) return null;
+
+            var hits = Physics.SphereCastAll(player.transform.position, 10f, Vector3.up);
+            var x = new List<ParaChute>();
+            foreach (var hit in hits)
+            {
+                var entity = hit.GetEntity()?.GetComponent<ParaChute>();
+                if (entity && !x.Contains(entity))
+                {
+                    message(player, "Dont");
+                    return false; //Prevent Suicide while parachuting
+                }
+            }
+            return null;
+        }
         private void OnPlayerSleepEnded(BasePlayer player)
         {
             if (!permission.UserHasPermission(player.UserIDString, permAuto))
             {
                 return;
             }
-            player.ChatMessage("AutoChute Attached!");
-            FallingCheck(player);
+            if (MyHeight(player.transform.position) >= config.otherautochute)
+            {
+                FallingCheck(player);
+                message(player, "Auto");
+            }
+
         }
         private object OnPlayerViolation(BasePlayer player, AntiHackType type, float amount)
         {
@@ -77,7 +103,7 @@ namespace Oxide.Plugins
                 if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString)) //Temp disable flyhack for parachuting.
                 {
                     DateTime lastSpawned = Chutes._data.chutecooldown[player.UserIDString];
-                    TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(disableflyhackdelay) - DateTime.Now);
+                    TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(config.disableflyhackdelay) - DateTime.Now);
                     if (timeRemaining.TotalSeconds > 0)
                     {
                         Puts("FLYHACK BLOCKED" + (BasePlayer.Find(player.UserIDString).displayName) + " " + timeRemaining.TotalSeconds.ToString());
@@ -89,19 +115,120 @@ namespace Oxide.Plugins
         }
         #endregion
 
+        #region Language
+        protected override void LoadDefaultMessages()
+        {
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+            {"Deployed", "<color=red>Deployed Parachute</color>"},
+            {"HoverD", "<color=red>Hover Disabled!</color>"},
+            {"HoverE", "<color=green>Hover Enabled!</color>"},
+            {"Mounted", "<color=red>You can't deploy when mounted.</color>"},
+            {"Ground", "<color=red>You can't deploy a parachute on the ground.</color>"},
+            {"Room", "<color=orange>Not enough room to deploy parachute!</color>"},
+            {"HeightFail", "Height: <color=red>{0}</color>"},
+            {"Cooldown", "You have <color=red>{0}</color> until your cooldown ends"},
+            {"Dont", "Dont Do It Buddy"},
+            {"Auto", "AutoChute Attached!"},
+            {"Controls", "MOVEMENT - <color=orange>W/A/S/D</color>" + Environment.NewLine + "GLIDE/DECEND/ACCELERATE> - <color=orange>Shift/Ctrl/Reload</color>" + Environment.NewLine + "CUT PARACHUTE - <color=orange>Jump</color>"},
+        }, this);
+        }
+
+        public void message(BasePlayer chatplayer, string key, params object[] args)
+        {
+            if (chatplayer == null && !chatplayer.IsConnected) { return; }
+            var message = string.Format(lang.GetMessage(key, this, chatplayer.UserIDString), args);
+            chatplayer.ChatMessage(message);
+        }
+        #endregion
+
+        #region Configuration
+        private class PluginConfig
+        {
+            [JsonProperty(PropertyName = "Height off ground to allow parachute:")] public float groundheight { get; set; }
+            [JsonProperty(PropertyName = "How long flyhack is disabled after exiting parachute:")] public int disableflyhackdelay { get; set; }
+            [JsonProperty(PropertyName = "Hight for auto parachute to acitive after exiting heli:")] public float heliautochute { get; set; }
+            [JsonProperty(PropertyName = "Height for auto parachute to active above for sky diving:")] public float otherautochute { get; set; }
+            [JsonProperty(PropertyName = "Max Height of Auto Trigger Point:")] public float maxHeightTrigger { get; set; }
+            [JsonProperty(PropertyName = "Delay for helicopter ejected parachutes to clear heli:")] public float heliautochutedelay { get; set; }
+            [JsonProperty(PropertyName = "Cool down between parachute usage:")] public float chutecooldowns { get; set; }
+            [JsonProperty(PropertyName = "Prevent cutting parachute unless bypassed above:")] public float nocutabove { get; set; }
+            [JsonProperty(PropertyName = "----Parachute Settings Below----")] public string parachutesettings { get; set; }
+            [JsonProperty(PropertyName = "upForce:")] public float upForce { get; set; }
+            [JsonProperty(PropertyName = "maxDropSpeed:")] public float maxDropSpeed { get; set; }
+            [JsonProperty(PropertyName = "forwardStrength:")] public float forwardStrength { get; set; }
+            [JsonProperty(PropertyName = "backwardStrength:")] public float backwardStrength { get; set; }
+            [JsonProperty(PropertyName = "rotationStrength:")] public float rotationStrength { get; set; }
+            [JsonProperty(PropertyName = "forwardResistance:")] public float forwardResistance { get; set; }
+            [JsonProperty(PropertyName = "rotationResistance:")] public float rotationResistance { get; set; }
+            [JsonProperty(PropertyName = "glidedevider:")] public float glidedevider { get; set; }
+            [JsonProperty(PropertyName = "decendmultiplyer:")] public float decendmultiplyer { get; set; }
+            [JsonProperty(PropertyName = "autoremoveParachuteHeight:")] public float autoremoveParachuteHeight { get; set; }
+            [JsonProperty(PropertyName = "autoremoveParachuteProximity:")] public float autoremoveParachuteProximity { get; set; }
+            [JsonProperty(PropertyName = "angularModifier:")] public float angularModifier { get; set; }
+            [JsonProperty(PropertyName = "hoverModifier:")] public float hoverModifier { get; set; }
+            [JsonProperty(PropertyName = "Sync Distance:")] public float syncDistance { get; set; }
+        }
+
+        private PluginConfig GetDefaultConfig()
+        {
+            return new PluginConfig
+            {
+                groundheight = 3f,
+                disableflyhackdelay = 10,
+                heliautochute = 15f,
+                otherautochute = 1.25f,
+                maxHeightTrigger = 800f,
+                heliautochutedelay = 1.0f,
+                chutecooldowns = 1,
+                nocutabove = 400f,
+                upForce = 8f,
+                maxDropSpeed = -14f,
+                forwardStrength = 10f,
+                backwardStrength = 8f,
+                rotationStrength = 0.4f,
+                forwardResistance = 0.3f,
+                rotationResistance = 0.5f,
+                glidedevider = 3f,
+                decendmultiplyer = 1.5f,
+                autoremoveParachuteHeight = 1.0f,
+                autoremoveParachuteProximity = 1.5f,
+                angularModifier = 50f,
+                hoverModifier = 0.1f,
+                syncDistance = 2f,
+            };
+        }
+
+        protected override void LoadDefaultConfig()
+        {
+            Config.Clear();
+            Config.WriteObject(GetDefaultConfig(), true);
+            config = Config.ReadObject<PluginConfig>();
+        }
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(config, true);
+        }
+        #endregion
+
         #region Helpers/Functions
+        public static void ControlInfo(BasePlayer player)
+            {
+
+            }
         private void FallingCheck(BasePlayer player)
         {
-            timer.Once(5, () =>
+            timer.Once(4, () =>
             {
                 if (player.transform.position.y > 800)
                 {
                     FallingCheck(player);
                 }
-                else if (player.transform.position.y > 600)
+                else if (player.transform.position.y > config.otherautochute)
                 {
                     if (player.isMounted) return; //exit loop since already in parachute
-                    TryDeployParachuteOnPlayer(player);
+                    if (!TryDeployParachuteOnPlayer(player))
+                        FallingCheck(player);
                 }
             });
         }
@@ -115,15 +242,15 @@ namespace Oxide.Plugins
             if (mountable == null || player == null) return;
             if (mountable.ToString().Contains("heli"))
             {
-                if (MyHeight(player.transform.position) >= minheliautochute)
+                if (MyHeight(player.transform.position) >= config.heliautochute)
                 {
-                    Timer ChuteCheck = timer.Once(heliautochutedelay, () =>
+                    Timer ChuteCheck = timer.Once(config.heliautochutedelay, () =>
                     {
                         if (CheckColliders(player, 3f))
                         {
                             return;
                         }
-                        player.ChatMessage("<color=red>Deployed Parachute</color>");
+                        message(player, "Deployed");
                         TryDeployParachuteOnPlayer(player);
                     });
                 }
@@ -139,25 +266,25 @@ namespace Oxide.Plugins
                 return;
             }
             var hits = Physics.SphereCastAll(player.transform.position, 10f, Vector3.up);
-                var x = new List<ParaChute>();
-                foreach (var hit in hits)
-                {
-                    var entity = hit.GetEntity()?.GetComponent<ParaChute>();
-                    if (entity && !x.Contains(entity))
-                        if (entity.maxDropSpeed != -14)
-                        {
-                            entity.maxDropSpeed = -14f;
-                            player.ChatMessage("<color=red>Hover Disabled!</color>");
-                            return;
-                        }
-                        else
-                        {
-                            entity.maxDropSpeed = 0.1f;
-                            player.ChatMessage("<color=green>Hover Enabled!</color>");
-                            return;
-                        }
-                }
-          }
+            var x = new List<ParaChute>();
+            foreach (var hit in hits)
+            {
+                var entity = hit.GetEntity()?.GetComponent<ParaChute>();
+                if (entity && !x.Contains(entity))
+                    if (entity.maxDropSpeed != config.maxDropSpeed)
+                    {
+                        entity.maxDropSpeed = config.maxDropSpeed;
+                        message(player, "HoverD");
+                        return;
+                    }
+                    else
+                    {
+                        entity.maxDropSpeed = config.hoverModifier;
+                        message(player, "HoverE");
+                        return;
+                    }
+            }
+        }
 
 
         [ChatCommand("chute")]
@@ -195,34 +322,34 @@ namespace Oxide.Plugins
         {
             if (player.isMounted)
             {
-                player.ChatMessage("<color=red>You can't deploy when mounted.</color>");
+                message(player, "Mounted");
                 return false;
             }
             if (player.IsOnGround())
             {
-                player.ChatMessage("<color=red>You can't deploy a parachute on the ground.</color>");
+                message(player, "Ground");
                 return false;
             }
 
-            if (CheckColliders(player, 1.9f))
+            if (CheckColliders(player, config.autoremoveParachuteProximity))
             {
-                player.ChatMessage("<color=orange>Not enough room to deploy parachute!</color>");
+                message(player, "Room");
                 return false;
             }
- 
-            if (MyHeight(player.transform.position) <= 3.0f)
+
+            if (MyHeight(player.transform.position) <= config.groundheight)
             {
-                player.ChatMessage("Must be higher than 3.0M! You are <color=orange>" + MyHeight(player.transform.position).ToString() + "M</color>");
+                message(player, "HeightFail", MyHeight(player.transform.position).ToString() + "M / " + config.groundheight.ToString() + "M");
                 return false;
             }
 
             if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString))
             {
                 DateTime lastSpawned = Chutes._data.chutecooldown[player.UserIDString];
-                TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(chutecooldowns) - DateTime.Now);
+                TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(config.chutecooldowns) - DateTime.Now);
                 if (timeRemaining.TotalSeconds > 0)
                 {
-                    player.ChatMessage(string.Format("You have <color=red>{0}</color> until your cooldown ends", timeRemaining.ToString("g")));
+                    message(player, "Cooldown", timeRemaining.ToString("g"));
                     return false;
                 }
                 Chutes._data.chutecooldown.Remove(player.UserIDString);
@@ -230,7 +357,7 @@ namespace Oxide.Plugins
 
             Chutes._data.chutecooldown.Add(player.UserIDString, DateTime.Now);
             Effect.server.Run("assets/prefabs/deployable/locker/sound/equip_zipper.prefab", player.transform.position);
-                    return DeployParachuteOnPositionAndRotation(player, player.transform.position + new Vector3(0f, 7f, 0f), new Vector3(0f, player.GetNetworkRotation().eulerAngles.y, 0f));
+            return DeployParachuteOnPositionAndRotation(player, player.transform.position + new Vector3(0f, 7f, 0f), new Vector3(0f, player.GetNetworkRotation().eulerAngles.y, 0f));
         }
 
         private bool DeployParachuteOnPositionAndRotation(BasePlayer player, Vector3 position, Vector3 rotation)
@@ -242,6 +369,7 @@ namespace Oxide.Plugins
                 worldItem.Spawn();
                 var sedanRigid = worldItem.gameObject.AddComponent<ParaChute>();
                 sedanRigid.SetPlayer(player);
+                message(player, "Controls");
             }
             catch
             {
@@ -262,7 +390,7 @@ namespace Oxide.Plugins
         private TimeSpan CeilingTimeSpan(TimeSpan timeSpan) =>
         new TimeSpan((long)Math.Ceiling(1.0 * timeSpan.Ticks / 10000000) * 10000000);
 
-       
+
         private Vector3 GetIdealFixedPositionForPlayer(BasePlayer player)
         {
             Vector3 forward = player.GetNetworkRotation() * Vector3.forward;
@@ -289,20 +417,9 @@ namespace Oxide.Plugins
             BaseEntity worldItem;
             BaseEntity chair;
             BaseEntity parachute;
+            public float maxDropSpeed = config.maxDropSpeed;
             public TriggerParent triggerParent;
             BasePlayer player;
-            public float upForce = 8f;
-            public float maxDropSpeed = -14f;
-            public float forwardStrength = 10f;
-            public float backwardStrength = 8f;
-            public float rotationStrength = 0.4f;
-            public float forwardResistance = 0.3f;
-            public float rotationResistance = 0.5f;
-            public float glidedevider = 3f;
-            public float decendmultiplyer = 1.5f;
-            public float autoremoveParachuteHeight = 1.0f;
-            public float autoremoveParachuteProximity = 1.0f;
-            public float angularModifier = 50f;
 
             public ParaChute()
             {
@@ -323,9 +440,7 @@ namespace Oxide.Plugins
                 chair.SetParent(parachute, 0, false, false);
                 chair.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
                 chair.UpdateNetworkGroup();
-
                 parachute.SetParent(worldItem, 0, false, false);
-
                 myRigidbody = worldItem.GetComponent<Rigidbody>();
                 myRigidbody.isKinematic = false;
                 enabled = false;
@@ -333,9 +448,6 @@ namespace Oxide.Plugins
 
             public void SetPlayer(BasePlayer player)
             {
-                player.ChatMessage("MOVEMENT - <color=orange>W/A/S/D</color>");
-                player.ChatMessage("GLIDE/DECEND/ACCELERATE> - <color=orange>Shift/Ctrl/Reload</color>");
-                player.ChatMessage("CUT PARACHUTE - <color=orange>Jump</color>");
                 this.player = player;
                 chair.GetComponent<BaseMountable>().MountPlayer(player);
                 enabled = true;
@@ -344,7 +456,18 @@ namespace Oxide.Plugins
             public void OnDestroy()
             {
                 Release();
-                Effect.server.Run("assets/bundled/prefabs/fx/player/groundfall.prefab", player.transform.position);
+                var Landsfx = new Effect("assets/bundled/prefabs/fx/player/groundfall.prefab", player, 0, Vector3.zero, Vector3.forward);
+                List<BasePlayer> ClosePlayers = new List<BasePlayer>();
+                Vis.Entities<BasePlayer>(player.transform.position, 10f, ClosePlayers); // Get nearby players to play effect to.
+
+                foreach (BasePlayer EffectPlayer in ClosePlayers)
+                {
+                    if (!EffectPlayer.IsConnected)
+                    {
+                        continue;
+                    }
+                    EffectNetwork.Send(Landsfx, EffectPlayer.net.connection);
+                }
             }
 
             public void Release()
@@ -369,13 +492,19 @@ namespace Oxide.Plugins
                     OnDestroy();
                     return;
                 }
-                if (Physics.Raycast(new Ray(chair.transform.position, Vector3.down), autoremoveParachuteHeight, parachuteLayer))
+                if (Physics.Raycast(new Ray(chair.transform.position, Vector3.down), config.autoremoveParachuteHeight, parachuteLayer))
                 {
                     OnDestroy();
                     return;
                 }
+                if (!player.IsAlive() || player.IsSleeping())
+                {
+                    player.EnsureDismounted();
+                    OnDestroy();
+                    return;
+                }
 
-                foreach (Collider col in Physics.OverlapSphere(chair.transform.position, autoremoveParachuteProximity, parachuteLayer))
+                foreach (Collider col in Physics.OverlapSphere(chair.transform.position, config.autoremoveParachuteProximity, parachuteLayer))
                 {
                     BaseEntity baseEntity = col.gameObject.ToBaseEntity();
 
@@ -391,7 +520,7 @@ namespace Oxide.Plugins
                 }
 
                 float FlyDistance = Vector3.Distance(player.transform.position, chair.transform.position);
-                if (FlyDistance >= 1f) //Distance to travel before resync body.
+                if (FlyDistance >= config.syncDistance && player.isMounted) //Distance to travel before resync body.
                 {
                     player.Teleport(chair.transform.position);
                 }
@@ -405,63 +534,62 @@ namespace Oxide.Plugins
                 }
                 if (player.serverInput.IsDown(BUTTON.JUMP))
                 {
-                    if (player.transform.position.y > 600f) { player.ChatMessage("<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> " + ((int)player.transform.position.y).ToString() + "/600M"); SetPlayer(player); }
+                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) { player.ChatMessage("<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> " + ((int)player.transform.position.y).ToString() + "/"+ config.nocutabove.ToString()+"M"); SetPlayer(player); }
                     else
                     {
                         OnDestroy();
                         Effect.server.Run("assets/bundled/prefabs/fx/player/groundfall.prefab", player.transform.position);
-                        player.ChatMessage("REDEPLOY - <color=orange>Use Button or Chat /chute</color>");
                         return;
                     }
                 }
 
                 if (player.serverInput.IsDown(BUTTON.SPRINT))
                 {
-                    myRigidbody.AddForce(Vector3.up * ((maxDropSpeed / glidedevider) - myRigidbody.velocity.y), ForceMode.Impulse);
+                    myRigidbody.AddForce(Vector3.up * ((maxDropSpeed / config.glidedevider) - myRigidbody.velocity.y), ForceMode.Impulse);
                 }
 
                 if (player.serverInput.IsDown(BUTTON.DUCK) && !player.serverInput.IsDown(BUTTON.SPRINT))
                 {
-                    myRigidbody.AddForce(Vector3.up * ((maxDropSpeed * decendmultiplyer) - myRigidbody.velocity.y), ForceMode.Impulse);
+                    myRigidbody.AddForce(Vector3.up * ((maxDropSpeed * config.decendmultiplyer) - myRigidbody.velocity.y), ForceMode.Impulse);
                 }
 
                 if (myRigidbody.velocity.y < maxDropSpeed)
                 {
                     myRigidbody.AddForce(Vector3.up * (maxDropSpeed - myRigidbody.velocity.y), ForceMode.Impulse);
                 }
-                myRigidbody.AddForce(Vector3.up * upForce, ForceMode.Acceleration);
+                myRigidbody.AddForce(Vector3.up * config.upForce, ForceMode.Acceleration);
 
                 if (myRigidbody.velocity.x < 0f || myRigidbody.velocity.x > 0f || myRigidbody.velocity.z < 0f || myRigidbody.velocity.z > 0f)
                 {
-                    myRigidbody.AddForce(new Vector3(-myRigidbody.velocity.x, 0f, -myRigidbody.velocity.z) * forwardResistance, ForceMode.Acceleration);
+                    myRigidbody.AddForce(new Vector3(-myRigidbody.velocity.x, 0f, -myRigidbody.velocity.z) * config.forwardResistance, ForceMode.Acceleration);
                 }
                 if (myRigidbody.angularVelocity.y > 0f || myRigidbody.angularVelocity.y > 0f)
                 {
-                    myRigidbody.AddTorque(new Vector3(0f, -myRigidbody.angularVelocity.y, 0f) * rotationResistance, ForceMode.Acceleration);
+                    myRigidbody.AddTorque(new Vector3(0f, -myRigidbody.angularVelocity.y, 0f) * config.rotationResistance, ForceMode.Acceleration);
                 }
                 if (player.serverInput.IsDown(BUTTON.RELOAD))
                 {
-                    myRigidbody.AddForce(myRigidbody.transform.forward * forwardStrength, ForceMode.Acceleration);
+                    myRigidbody.AddForce(myRigidbody.transform.forward * config.forwardStrength, ForceMode.Acceleration);
                 }
                 if (player.serverInput.IsDown(BUTTON.FORWARD))
                 {
-                    myRigidbody.AddForce(myRigidbody.transform.forward * forwardStrength, ForceMode.Acceleration);
+                    myRigidbody.AddForce(myRigidbody.transform.forward * config.forwardStrength, ForceMode.Acceleration);
                 }
                 if (player.serverInput.IsDown(BUTTON.BACKWARD))
                 {
-                    myRigidbody.AddForce(-myRigidbody.transform.forward * backwardStrength, ForceMode.Acceleration);
+                    myRigidbody.AddForce(-myRigidbody.transform.forward * config.backwardStrength, ForceMode.Acceleration);
                 }
                 if (player.serverInput.IsDown(BUTTON.RIGHT))
                 {
-                    myRigidbody.AddTorque(Vector3.up * rotationStrength, ForceMode.Acceleration);
+                    myRigidbody.AddTorque(Vector3.up * config.rotationStrength, ForceMode.Acceleration);
                 }
                 if (player.serverInput.IsDown(BUTTON.LEFT))
                 {
-                    myRigidbody.AddTorque(Vector3.up * -rotationStrength, ForceMode.Acceleration);
+                    myRigidbody.AddTorque(Vector3.up * -config.rotationStrength, ForceMode.Acceleration);
                 }
                 if (myRigidbody.angularVelocity.y > 0f || myRigidbody.angularVelocity.y < 0f)
                 {
-                    worldItem.transform.rotation = Quaternion.Euler(worldItem.transform.rotation.eulerAngles.x, worldItem.transform.rotation.eulerAngles.y, -myRigidbody.angularVelocity.y * angularModifier);
+                    worldItem.transform.rotation = Quaternion.Euler(worldItem.transform.rotation.eulerAngles.x, worldItem.transform.rotation.eulerAngles.y, -myRigidbody.angularVelocity.y * config.angularModifier);
                 }
                 if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString))
                 {
