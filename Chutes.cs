@@ -130,6 +130,7 @@ namespace Oxide.Plugins
             {"Cooldown", "You have <color=red>{0}</color> until your cooldown ends"},
             {"Dont", "Dont Do It Buddy"},
             {"Auto", "AutoChute Attached!"},
+            {"RAuto", "AutoChute Removed!"},
             {"Controls", "MOVEMENT - <color=orange>W/A/S/D</color>" + Environment.NewLine + "GLIDE/DECEND/ACCELERATE> - <color=orange>Shift/Ctrl/Reload</color>" + Environment.NewLine + "CUT PARACHUTE - <color=orange>Jump</color>"},
         }, this);
         }
@@ -150,6 +151,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Hight for auto parachute to acitive after exiting heli:")] public float heliautochute { get; set; }
             [JsonProperty(PropertyName = "Height for auto parachute to active above for sky diving:")] public float otherautochute { get; set; }
             [JsonProperty(PropertyName = "Max Height of Auto Trigger Point:")] public float maxHeightTrigger { get; set; }
+            [JsonProperty(PropertyName = "Min Height of Auto Trigger Point:")] public float minHeightTrigger { get; set; }
             [JsonProperty(PropertyName = "Delay for helicopter ejected parachutes to clear heli:")] public float heliautochutedelay { get; set; }
             [JsonProperty(PropertyName = "Cool down between parachute usage:")] public float chutecooldowns { get; set; }
             [JsonProperty(PropertyName = "Prevent cutting parachute unless bypassed above:")] public float nocutabove { get; set; }
@@ -177,8 +179,9 @@ namespace Oxide.Plugins
                 groundheight = 3f,
                 disableflyhackdelay = 10,
                 heliautochute = 15f,
-                otherautochute = 1.25f,
+                otherautochute = 400f,
                 maxHeightTrigger = 800f,
+                minHeightTrigger = 15f,
                 heliautochutedelay = 1.0f,
                 chutecooldowns = 1,
                 nocutabove = 400f,
@@ -213,20 +216,25 @@ namespace Oxide.Plugins
 
         #region Helpers/Functions
         public static void ControlInfo(BasePlayer player)
-            {
+        {
 
-            }
+        }
         private void FallingCheck(BasePlayer player)
         {
             timer.Once(4, () =>
             {
-                if (player.transform.position.y > 800)
+                if (player.transform.position.y > config.maxHeightTrigger) //Still in safe space.
                 {
                     FallingCheck(player);
                 }
-                else if (player.transform.position.y > config.otherautochute)
+                else if (player.transform.position.y > config.otherautochute && player.transform.position.y > config.minHeightTrigger)
                 {
-                    if (player.isMounted) return; //exit loop since already in parachute
+                    if (player.isMounted || player.IsOnGround())//exit loop since already in parachute or landed
+                    {
+                        message(player, "RAuto");
+                        return;
+                    }
+
                     if (!TryDeployParachuteOnPlayer(player))
                         FallingCheck(player);
                 }
@@ -257,7 +265,7 @@ namespace Oxide.Plugins
             }
         }
 
-        [ChatCommand("hover")]
+        [ChatCommand("chutehover")]
         void Hover(BasePlayer player)
         {
             if (player == null) return;
@@ -325,9 +333,21 @@ namespace Oxide.Plugins
                 message(player, "Mounted");
                 return false;
             }
+
+            if(player.IsFlying) //Player is using no clip
+            {
+                return false;
+            }
+
             if (player.IsOnGround())
             {
                 message(player, "Ground");
+                return false;
+            }
+
+            if (MyHeight(player.transform.position) <= config.groundheight)
+            {
+                message(player, "HeightFail", MyHeight(player.transform.position).ToString() + "M / " + config.groundheight.ToString() + "M");
                 return false;
             }
 
@@ -337,11 +357,6 @@ namespace Oxide.Plugins
                 return false;
             }
 
-            if (MyHeight(player.transform.position) <= config.groundheight)
-            {
-                message(player, "HeightFail", MyHeight(player.transform.position).ToString() + "M / " + config.groundheight.ToString() + "M");
-                return false;
-            }
 
             if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString))
             {
@@ -381,6 +396,8 @@ namespace Oxide.Plugins
         public static float MyHeight(Vector3 Pos)
         {
             float GroundHeight = TerrainMeta.HeightMap.GetHeight(Pos);
+            float WaterHeight = TerrainMeta.WaterMap.GetHeight(Pos);
+            if (GroundHeight < WaterHeight) GroundHeight = WaterHeight;
             float PlayerHeight = Pos.y;
             float Difference = (PlayerHeight - GroundHeight);
             Difference = (float)Math.Round((Decimal)Difference, 3, MidpointRounding.AwayFromZero);
@@ -534,7 +551,7 @@ namespace Oxide.Plugins
                 }
                 if (player.serverInput.IsDown(BUTTON.JUMP))
                 {
-                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) { player.ChatMessage("<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> " + ((int)player.transform.position.y).ToString() + "/"+ config.nocutabove.ToString()+"M"); SetPlayer(player); }
+                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) { player.ChatMessage("<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> " + ((int)player.transform.position.y).ToString() + "/" + config.nocutabove.ToString() + "M" + Environment.NewLine + "<color=red> You can force cut parachute by holding R and pressing Space</color>"); SetPlayer(player); }
                     else
                     {
                         OnDestroy();
