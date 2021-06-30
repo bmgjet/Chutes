@@ -3,10 +3,11 @@ using Oxide.Core;
 using UnityEngine;
 using System;
 using Newtonsoft.Json;
+using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("Chutes", "bmgjet", "1.0.1")]
+    [Info("Chutes", "bmgjet", "1.0.2")]
     [Description("Parachute for use with safespace bases")]
 
     class Chutes : RustPlugin
@@ -58,6 +59,11 @@ namespace Oxide.Plugins
 
             if (Chutes.config != null)
                 Chutes.config = null;
+
+            foreach (BasePlayer current in BasePlayer.activePlayerList)
+            {
+                CuiHelper.DestroyUi(current, "ChuteInfo");
+            }
         }
 
         void OnNewSave()
@@ -106,7 +112,7 @@ namespace Oxide.Plugins
                     TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(config.disableflyhackdelay) - DateTime.Now);
                     if (timeRemaining.TotalSeconds > 0)
                     {
-                        Puts("FLYHACK BLOCKED" + (BasePlayer.Find(player.UserIDString).displayName) + " " + timeRemaining.TotalSeconds.ToString());
+                        //Puts("FLYHACK BLOCKED" + (BasePlayer.Find(player.UserIDString).displayName) + " " + timeRemaining.TotalSeconds.ToString());
                         return true;
                     }
                 }
@@ -131,7 +137,8 @@ namespace Oxide.Plugins
             {"Dont", "Dont Do It Buddy"},
             {"Auto", "AutoChute Attached!"},
             {"RAuto", "AutoChute Removed!"},
-            {"Controls", "MOVEMENT - <color=orange>W/A/S/D</color>" + Environment.NewLine + "GLIDE/DECEND/ACCELERATE> - <color=orange>Shift/Ctrl/Reload</color>" + Environment.NewLine + "CUT PARACHUTE - <color=orange>Jump</color>"},
+            {"ToHigh", "<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> {0}M" + Environment.NewLine + "<color=red> You can force cut parachute by holding R and pressing Space</color>" },
+            {"Controls", "MOVEMENT - <color=orange>W/A/S/D</color>" + "\n" + "GLIDE/DECEND/ACCELERATE - <color=orange>Shift/Ctrl/Reload</color>" + "\n" + "CUT PARACHUTE - <color=orange>Jump</color>"},
         }, this);
         }
 
@@ -155,6 +162,9 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Delay for helicopter ejected parachutes to clear heli:")] public float heliautochutedelay { get; set; }
             [JsonProperty(PropertyName = "Cool down between parachute usage:")] public float chutecooldowns { get; set; }
             [JsonProperty(PropertyName = "Prevent cutting parachute unless bypassed above:")] public float nocutabove { get; set; }
+            [JsonProperty(PropertyName = "Show parachute info:")] public bool showinfo { get; set; }
+            [JsonProperty(PropertyName = "Info text size:")] public int infotextsize { get; set; }
+            [JsonProperty(PropertyName = "Block free look/chat when parachuting:")] public bool block { get; set; }
             [JsonProperty(PropertyName = "----Parachute Settings Below----")] public string parachutesettings { get; set; }
             [JsonProperty(PropertyName = "upForce:")] public float upForce { get; set; }
             [JsonProperty(PropertyName = "maxDropSpeed:")] public float maxDropSpeed { get; set; }
@@ -185,6 +195,9 @@ namespace Oxide.Plugins
                 heliautochutedelay = 1.0f,
                 chutecooldowns = 1,
                 nocutabove = 400f,
+                showinfo = true,
+                infotextsize = 18,
+                block = false,
                 upForce = 8f,
                 maxDropSpeed = -14f,
                 forwardStrength = 10f,
@@ -215,14 +228,11 @@ namespace Oxide.Plugins
         #endregion
 
         #region Helpers/Functions
-        public static void ControlInfo(BasePlayer player)
-        {
-
-        }
         private void FallingCheck(BasePlayer player)
         {
             timer.Once(4, () =>
             {
+                if (!player.IsConnected) return;
                 if (player.transform.position.y > config.maxHeightTrigger) //Still in safe space.
                 {
                     FallingCheck(player);
@@ -334,7 +344,7 @@ namespace Oxide.Plugins
                 return false;
             }
 
-            if(player.IsFlying) //Player is using no clip
+            if (player.IsFlying) //Player is using no clip
             {
                 return false;
             }
@@ -384,7 +394,7 @@ namespace Oxide.Plugins
                 worldItem.Spawn();
                 var sedanRigid = worldItem.gameObject.AddComponent<ParaChute>();
                 sedanRigid.SetPlayer(player);
-                message(player, "Controls");
+                UserUI(player); //Show Controlls
             }
             catch
             {
@@ -407,15 +417,16 @@ namespace Oxide.Plugins
         private TimeSpan CeilingTimeSpan(TimeSpan timeSpan) =>
         new TimeSpan((long)Math.Ceiling(1.0 * timeSpan.Ticks / 10000000) * 10000000);
 
-
-        private Vector3 GetIdealFixedPositionForPlayer(BasePlayer player)
+        void UserUI(BasePlayer player)
         {
-            Vector3 forward = player.GetNetworkRotation() * Vector3.forward;
-            return player.transform.position + forward.normalized * 6f + Vector3.up * 4f;
-        }
+            if (!config.showinfo) return;
 
-        private Quaternion GetIdealRotationForPlayer(BasePlayer player) =>
-        Quaternion.Euler(0, player.GetNetworkRotation().eulerAngles.y - 135, 0);
+            CuiHelper.DestroyUi(player, "ChuteInfo");
+            var elements = new CuiElementContainer();
+            var mainName = elements.Add(new CuiPanel { Image = { Color = "0.1 0.1 0.1 0" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }, CursorEnabled = config.block }, "Overlay", "ChuteInfo");
+            elements.Add(new CuiLabel { Text = { Text = lang.GetMessage("Controls", this, player.UserIDString), FontSize = config.infotextsize, Align = TextAnchor.UpperCenter }, RectTransform = { AnchorMin = "0 0.20", AnchorMax = "1 0.9" } }, mainName);
+            CuiHelper.AddUi(player, elements);
+        }
         #endregion
 
         #region Classes And Overrides
@@ -485,6 +496,7 @@ namespace Oxide.Plugins
                     }
                     EffectNetwork.Send(Landsfx, EffectPlayer.net.connection);
                 }
+                CuiHelper.DestroyUi(player, "ChuteInfo");
             }
 
             public void Release()
@@ -551,7 +563,12 @@ namespace Oxide.Plugins
                 }
                 if (player.serverInput.IsDown(BUTTON.JUMP))
                 {
-                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) { player.ChatMessage("<color=red>WARNING</color> - <color=green>Too High To Cut Parachute</color> " + ((int)player.transform.position.y).ToString() + "/" + config.nocutabove.ToString() + "M" + Environment.NewLine + "<color=red> You can force cut parachute by holding R and pressing Space</color>"); SetPlayer(player); }
+                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) 
+                    {
+                        Chutes c = new Chutes();
+                        c.message(player, "ToHigh",((int)player.transform.position.y).ToString() + "/" + config.nocutabove.ToString());
+                        SetPlayer(player); 
+                    }
                     else
                     {
                         OnDestroy();
