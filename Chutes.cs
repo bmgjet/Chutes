@@ -13,9 +13,9 @@ namespace Oxide.Plugins
     class Chutes : RustPlugin
     {
         #region Declarations
-        public const string permUse = "Chutes.use";
-        public const string permAuto = "Chutes.auto";
-        public const string permHover = "Chutes.hover";
+        public const string permUse = "chutes.use";
+        public const string permAuto = "chutes.auto";
+        public const string permHover = "chutes.hover";
         private static SaveData _data;
         private static PluginConfig config;
         static int parachuteLayer = 1 << (int)Rust.Layer.Water | 1 << (int)Rust.Layer.Transparent | 1 << (int)Rust.Layer.World | 1 << (int)Rust.Layer.Construction | 1 << (int)Rust.Layer.Debris | 1 << (int)Rust.Layer.Default | 1 << (int)Rust.Layer.Terrain | 1 << (int)Rust.Layer.Tree | 1 << (int)Rust.Layer.Vehicle_Large | 1 << (int)Rust.Layer.Deployed;
