@@ -13,9 +13,9 @@ namespace Oxide.Plugins
     class Chutes : RustPlugin
     {
         #region Declarations
-        public const string permUse = "chutes.use";
-        public const string permAuto = "chutes.auto";
-        public const string permHover = "chutes.hover";
+        public const string permUse = "Chutes.use";
+        public const string permAuto = "Chutes.auto";
+        public const string permHover = "Chutes.hover";
         private static SaveData _data;
         private static PluginConfig config;
         static int parachuteLayer = 1 << (int)Rust.Layer.Water | 1 << (int)Rust.Layer.Transparent | 1 << (int)Rust.Layer.World | 1 << (int)Rust.Layer.Construction | 1 << (int)Rust.Layer.Debris | 1 << (int)Rust.Layer.Default | 1 << (int)Rust.Layer.Terrain | 1 << (int)Rust.Layer.Tree | 1 << (int)Rust.Layer.Vehicle_Large | 1 << (int)Rust.Layer.Deployed;
@@ -98,7 +98,7 @@ namespace Oxide.Plugins
             if (MyHeight(player.transform.position) >= config.otherautochute)
             {
                 FallingCheck(player);
-                message(player, "Auto");
+              //  message(player, "Auto");
             }
 
         }
@@ -106,16 +106,16 @@ namespace Oxide.Plugins
         {
             if (type == AntiHackType.FlyHack)
             {
-                if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString)) //Temp disable flyhack for parachuting.
-                {
-                    DateTime lastSpawned = Chutes._data.chutecooldown[player.UserIDString];
-                    TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(config.disableflyhackdelay) - DateTime.Now);
-                    if (timeRemaining.TotalSeconds > 0)
-                    {
-                        //Puts("FLYHACK BLOCKED" + (BasePlayer.Find(player.UserIDString).displayName) + " " + timeRemaining.TotalSeconds.ToString());
-                        return true;
-                    }
-                }
+                // if (Chutes._data.chutecooldown.ContainsKey(player.UserIDString)) //Temp disable flyhack for parachuting.
+                // {
+                //   DateTime lastSpawned = Chutes._data.chutecooldown[player.UserIDString];
+                //   TimeSpan timeRemaining = CeilingTimeSpan(lastSpawned.AddSeconds(config.disableflyhackdelay) - DateTime.Now);
+                //  if (timeRemaining.TotalSeconds > 0)
+                //  {
+                //Puts("FLYHACK BLOCKED" + (BasePlayer.Find(player.UserIDString).displayName) + " " + timeRemaining.TotalSeconds.ToString());
+                return true;
+                // }
+                //}
             }
             return null;
         }
@@ -188,7 +188,7 @@ namespace Oxide.Plugins
             {
                 groundheight = 3f,
                 disableflyhackdelay = 10,
-                heliautochute = 15f,
+                heliautochute = 45f,
                 otherautochute = 400f,
                 maxHeightTrigger = 800f,
                 minHeightTrigger = 15f,
@@ -241,7 +241,7 @@ namespace Oxide.Plugins
                 {
                     if (player.isMounted || player.IsOnGround())//exit loop since already in parachute or landed
                     {
-                        message(player, "RAuto");
+                      //  message(player, "RAuto");
                         return;
                     }
 
@@ -258,10 +258,15 @@ namespace Oxide.Plugins
                 return;
             }
             if (mountable == null || player == null) return;
-            if (mountable.ToString().Contains("heli"))
+            if (mountable.ToString().Contains("deployed"))
             {
-                if (MyHeight(player.transform.position) >= config.heliautochute)
+                return;
+            }
+           if (MyHeight(player.transform.position) >= config.heliautochute)
+            {
+                NextFrame(() =>
                 {
+                    if (player.isMounted) { return; }
                     Timer ChuteCheck = timer.Once(config.heliautochutedelay, () =>
                     {
                         if (CheckColliders(player, 3f))
@@ -271,7 +276,8 @@ namespace Oxide.Plugins
                         message(player, "Deployed");
                         TryDeployParachuteOnPlayer(player);
                     });
-                }
+
+                });
             }
         }
 
@@ -502,7 +508,7 @@ namespace Oxide.Plugins
             public void Release()
             {
                 enabled = false;
-                if (chair != null && chair.GetComponent<BaseMountable>().IsMounted())
+                if (chair != null && chair.GetComponent<BaseMountable>().AnyMounted())
                     chair.GetComponent<BaseMountable>().DismountPlayer(player, false);
                 if (player != null && player.isMounted)
                     player.DismountObject();
@@ -563,11 +569,11 @@ namespace Oxide.Plugins
                 }
                 if (player.serverInput.IsDown(BUTTON.JUMP))
                 {
-                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD)) 
+                    if (player.transform.position.y > config.nocutabove && !player.serverInput.IsDown(BUTTON.RELOAD))
                     {
                         Chutes c = new Chutes();
-                        c.message(player, "ToHigh",((int)player.transform.position.y).ToString() + "/" + config.nocutabove.ToString());
-                        SetPlayer(player); 
+                        c.message(player, "ToHigh", ((int)player.transform.position.y).ToString() + "/" + config.nocutabove.ToString());
+                        SetPlayer(player);
                     }
                     else
                     {
