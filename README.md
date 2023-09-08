@@ -1,3 +1,6 @@
+<h1>THIS PLUGIN IS BROKEN AS OF SEP UPDATE SINCE FACEPUNCH REMOVED THE PARACHUTE PREFAB. YOU CAN USE NATIVE PARACHUTES FROM THE GAME NOW THO.</h1>
+
+
 <h2 class="ipsType_sectionHead">About Chutes</h2>
 <div class="ipsType_normal ipsSpacer_top">
 <div class="ipsType_richText ipsContained ipsType_break" data-controller="core.front.core.lightboxedImages">
